@@ -68,6 +68,7 @@
     } else {
       $("msg").textContent = c.m;
     }
+    setStatusLine(state, payload);
     flash();
   }
   window.setState = setState;
@@ -75,73 +76,66 @@
   function paintScan(s) {
     $("fOrder").textContent = s.schedule_no || s.order_no || "—";
     $("fUnit").textContent  = s.unit_no || "—";
-    $("fProf").textContent  = s.master_key || "—";
+    if (s.schedule_no) { $("hdrSched").textContent = s.schedule_no; }
 
-    // The unit number is the largest thing the payload gives us that means
-    // anything to a person. The bin would be better, but the barcode does
-    // not carry it and SAW 5's schedule files do not either.
+    // The combination unit, only when there is one. FeneVision shows this as
+    // a parent order-item, for example unit 523 holding units 61, 62, 275,
+    // 521 and 522. Most units have no parent, so the row stays hidden.
+    var hasParent = s.parent_key && s.parent_key !== "0";
+    $("parentRow").hidden = !hasParent;
+    if (hasParent) { $("fParent").textContent = s.parent_key; }
+
+    // The unit is the biggest thing the barcode gives us that means anything
+    // to a person. The bin would be better and is what the operator acts on,
+    // but the barcode does not carry it and SAW 5's schedule files do not
+    // either. It comes from FeneVision when the join exists.
     $("slotcue").textContent = s.bin_no ? "Rack in bin" : "Unit";
     $("slotbig").textContent = s.bin_no || s.unit_no || "OK";
 
     var bits = [];
     if (s.schedule_no) { bits.push("Schedule " + s.schedule_no); }
-    if (s.parent_key && s.parent_key !== "0") { bits.push("parent " + s.parent_key); }
+    if (hasParent)     { bits.push("in combo " + s.parent_key); }
     $("slotmeta").innerHTML = bits.join(" &nbsp;·&nbsp; ");
+  }
 
-    // Deliberately NOT a position in the schedule. The unit number is a
-    // FeneVision key, not a count of anything, and it exceeds the number of
-    // units in the schedule files. Showing "237 of 208" would be a lie.
-    $("posnBig").textContent   = s.unit_no || "—";
-    $("posnTitle").textContent = "Unit number";
-    $("posnSub").textContent   = "From the barcode";
+  /* FeneVision Tracking prints one sentence across the bottom, in the shape
+     "Unit 142 Complete on 2026-08-19 1:49 PM". Ours says what actually
+     happened rather than claiming completion, because whether a scan
+     completes anything is exactly what is not yet settled. */
+  function setStatusLine(state, s) {
+    var el = $("statusLine");
+    if (!el) { return; }
+    var t = new Date().toLocaleTimeString();
+    if (state === "ok" && s) {
+      el.textContent = "Unit " + (s.unit_no || "?") + " scanned at " + t + ".";
+    } else if (state === "dup" && s) {
+      el.textContent = "Unit " + (s.unit_no || "?") + " scanned again at " + t + ". Saved.";
+    } else if (state === "unexpected") {
+      el.textContent = "Label not recognised at " + t + ". Saved for review.";
+    } else if (state === "queued") {
+      el.textContent = "No network at " + t + ". Scan held on the tablet and will send.";
+    } else if (state === "reported") {
+      el.textContent = "Issue reported at " + t + ".";
+    } else if (state === "error") {
+      el.textContent = "Scan failed at " + t + ".";
+    }
   }
 
   function paintStatus(st) {
     if (!st) { return; }
 
-    // Capture mode: report what actually happened, with no denominator.
-    // We cannot show progress against a schedule until we know where the
-    // day's schedule comes from and whether a scan counts a piece or a
-    // window. Showing a percentage before then would be invented.
+    // Scans taken and distinct payloads among them. Both are true and both
+    // can be checked against the capture file. No denominator and no
+    // percentage: progress against a schedule needs the day's real schedule
+    // off the machine, and a decision on whether a scan counts a piece or a
+    // window. Neither is settled, so neither is shown.
     if (st.capture) {
-      $("schedName").textContent = "Capture session";
       $("cDone").textContent = st.capture.scans;
       $("cLeft").textContent = st.capture.units;
-      $("barFill").style.width = "0%";
-      var lblScanned = document.querySelector(".cnt.a .lbl");
-      var lblLeft    = document.querySelector(".cnt.b .lbl");
-      if (lblScanned) { lblScanned.textContent = "Scans"; }
-      if (lblLeft)    { lblLeft.textContent = "Distinct units"; }
-    } else {
-      var cur = st.current;
-      if (cur) {
-        $("schedName").textContent = cur.file;
-        $("cDone").textContent = cur.scanned;
-        $("cLeft").textContent = Math.max(0, cur.total - cur.scanned);
-        var pct = cur.total ? Math.round((cur.scanned / cur.total) * 100) : 0;
-        $("barFill").style.width = pct + "%";
-      }
+    } else if (st.current) {
+      $("cDone").textContent = st.current.scanned;
+      $("cLeft").textContent = st.current.total;
     }
-
-    var out = "", remaining = 0, curIdx = -1;
-    for (var i = 0; i < st.schedules.length; i++) {
-      if (st.schedules[i].state === "cur") { curIdx = i; }
-    }
-    for (var j = 0; j < st.schedules.length; j++) {
-      var s = st.schedules[j];
-      if (curIdx >= 0 && j > curIdx + 2) { remaining++; continue; }
-      var cls, glyph, tag;
-      if (s.state === "done")     { cls = "done"; glyph = "✓"; tag = "Complete"; }
-      else if (s.state === "cur") { cls = "cur";  glyph = "▶"; tag = "Current"; }
-      else                        { cls = "next"; glyph = "○"; tag = (j === curIdx + 1) ? "Next" : "After"; }
-      out += '<div class="q ' + cls + '"><span class="g">' + glyph + '</span>' +
-             '<span class="f">' + s.file + '</span><span class="s">' + tag + '</span></div>';
-    }
-    if (remaining > 0) {
-      out += '<div class="q more"><span class="g">+</span><span>' + remaining + ' more today</span></div>';
-    }
-    $("qlist").innerHTML = out;
-    $("qCount").textContent = (st.done_count + 1) + " of " + st.total_schedules;
   }
 
   function setConnection(online, queuedCount) {

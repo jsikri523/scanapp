@@ -23,7 +23,9 @@
       <div class="wm">VINYLBILT<small>WINDOWS &amp; DOORS</small></div>
     </div>
     <div class="hbit"><div class="k">STATION</div><div class="v">{{ station.name }}</div></div>
-    <div class="hbit"><div class="k">SCHEDULE</div><div class="v m" id="hdrSched">{{ status.current.schedule_no if status.current else '—' }}</div></div>
+    <!-- Filled from the last scan, not from the sample schedule data. It has
+         to say what was actually scanned or nothing at all. -->
+    <div class="hbit"><div class="k">SCHEDULE</div><div class="v m" id="hdrSched">&mdash;</div></div>
     <div class="spacer"></div>
     <div class="hright">
       <div class="conn" id="conn"><i></i> Scanner ready</div>
@@ -48,56 +50,47 @@
       <div class="msg" id="msg">Scan the label on the next piece.</div>
     </div>
 
+    <!-- Laid out after the FeneVision Tracking unit panel, so a supervisor
+         reads the same fields in the same places on either screen. The
+         master key is deliberately not shown: it is a database key and
+         means nothing to an operator. -->
     <div class="card">
-      <div class="cap"><span class="lbl">Last label</span></div>
-      <div class="cell">
-        <div class="k">Schedule</div>
-        <div class="v" id="fOrder">&mdash;</div>
+      <div class="cap"><span class="lbl">Unit details</span></div>
+
+      <div class="grid">
+        <div class="fld"><div class="k">Schedule</div><div class="v" id="fOrder">&mdash;</div></div>
+        <div class="fld"><div class="k">Unit</div><div class="v" id="fUnit">&mdash;</div></div>
       </div>
-      <div class="cell">
-        <div class="k">Unit</div>
-        <div class="v" id="fUnit">&mdash;</div>
+
+      <div class="fld wide" id="parentRow" hidden>
+        <div class="k">Part of combination unit</div>
+        <div class="v" id="fParent">&mdash;</div>
       </div>
-      <div class="cell">
-        <div class="k">Master key</div>
-        <div class="v small" id="fProf">&mdash;</div>
-      </div>
-      <div class="posn">
-        <div class="big" id="posnBig">&mdash;</div>
-        <div class="posntxt">
-          <b id="posnTitle">Position in schedule</b>
-          <span id="posnSub">As printed on the label</span>
-        </div>
+
+      <!-- Batch, Bin, Part, Customer and Order-Item all appear on the
+           FeneVision panel and all come from FeneVision, not the barcode.
+           Deliberately left out until the join exists: on an 11 inch tablet
+           five empty rows cost more than they teach. -->
+
+      <div class="capture">
+        <div class="crow"><span class="lbl">Scans</span><span class="n" id="cDone">0</span></div>
+        <div class="crow"><span class="lbl">Units</span><span class="n b" id="cLeft">0</span></div>
       </div>
     </div>
   </main>
 
-  <div class="bottom">
-    <div class="prog">
-      <div class="prow">
-        <div class="schedname">
-          <span class="lbl">Saw file</span>
-          <span class="n" id="schedName">&mdash;</span>
-        </div>
-        <div class="cnts">
-          <div class="cnt a"><span class="lbl">Scanned</span><span class="n" id="cDone">0</span></div>
-          <div class="cnt b"><span class="lbl">Remaining</span><span class="n" id="cLeft">0</span></div>
-        </div>
-      </div>
-      <div class="bar"><i id="barFill" style="width:0%"></i></div>
-      <div class="acts">
-        <button class="warn" onclick="reportIssue()">Report issue</button>
-        <button class="primary" onclick="backToReady()">Back to ready</button>
-      </div>
-    </div>
+  <!-- FeneVision Tracking puts a single plain sentence across the bottom,
+       "Unit 142 Complete on 2026-08-19 1:49 PM". It is the most readable
+       thing on that screen from a distance, so it is kept. -->
+  <div class="statusline" id="statusLine">Waiting for the first scan.</div>
 
-    <div class="qpanel">
-      <div class="qcap">
-        <span class="lbl">{% if demo %}Sample schedules (not live){% else %}Today&rsquo;s schedules{% endif %}</span>
-        <span class="r" id="qCount">&mdash;</span>
-      </div>
-      <div class="qlist" id="qlist"></div>
-    </div>
+  <!-- The schedule queue panel is gone. It showed sample data that was not
+       what the saw was cutting, and on an 11 inch tablet the space belongs
+       to the scan state. It returns when the day's real schedule is read
+       off the machine. -->
+  <div class="acts">
+    <button class="warn" onclick="reportIssue()">Report issue</button>
+    <button class="primary" onclick="backToReady()">Back to ready</button>
   </div>
 
   {% if demo %}
