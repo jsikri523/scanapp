@@ -1,0 +1,19 @@
+# Virtual environments. Created per machine, never shared.
+.venv/
+venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Captured scans. These are real production data from the floor: schedules,
+# unit numbers and FeneVision keys. They are evidence and worth keeping, but
+# they belong on the network drive, not in source control.
+*.jsonl
+
+# Local settings and anything holding a connection string
+.env
+*.local
+
+# Packaging artefacts
+*.zip

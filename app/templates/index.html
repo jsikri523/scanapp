@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scan stations</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='scanapp.css') }}">
+  <style>
+    .picker{max-width:640px;margin:0 auto;padding:56px 24px;display:flex;flex-direction:column;gap:18px}
+    .picker h1{font-size:26px;font-weight:800;letter-spacing:-.01em}
+    .picker p{color:var(--ink-2);line-height:1.55}
+    .picker a{display:block;padding:20px 22px;border:3px solid var(--line-strong);border-radius:6px;
+      background:var(--surface);text-decoration:none;color:var(--ink);font-size:22px;font-weight:800}
+    .picker a:hover{border-color:var(--brand);color:var(--brand)}
+    .picker code{font-family:var(--mono);font-size:13px;color:var(--ink-3)}
+  </style>
+</head>
+<body>
+  <div class="picker">
+    <h1>Scan stations</h1>
+    <p>Setup page only. A tablet on the floor opens its station URL directly and never sees this.</p>
+    {% for key, st in stations.items() %}
+      <a href="{{ url_for('pages.station', station_key=key) }}">
+        {{ st.name }}<br><code>{{ url_for('pages.station', station_key=key) }}</code>
+      </a>
+    {% endfor %}
+  </div>
+</body>
+</html>

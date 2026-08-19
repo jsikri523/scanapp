@@ -1,0 +1,36 @@
+# /etc/systemd/system/scanapp.service
+# Matches the pattern used by the other AppX apps on vb-wappx01-of.
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now scanapp
+#   sudo systemctl status scanapp
+
+[Unit]
+Description=scanapp (SAW 5 scanning)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/apps/scanapp
+
+# Leave SCANAPP_DB_DSN unset to run in demo mode with no database.
+# Confirm the server address before setting this: review documents record
+# 10.60.0.21, the running AppX apps connect to 10.0.0.21 (open item E4.4).
+Environment="SCANAPP_SECRET_KEY=change-me"
+# Environment="SCANAPP_DB_DSN=DRIVER={ODBC Driver 18 for SQL Server};SERVER=10.0.0.21,1433;DATABASE=FVMaster;UID=scanapp;PWD=...;TrustServerCertificate=yes"
+
+RuntimeDirectory=gunicorn
+ExecStart=/var/www/apps/scanapp/venv/bin/gunicorn \
+    --workers 3 \
+    --bind unix:/run/gunicorn/scanapp.sock \
+    --umask 007 \
+    --access-logfile - \
+    --error-logfile - \
+    wsgi:application
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
