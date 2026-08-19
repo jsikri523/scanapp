@@ -52,7 +52,7 @@ def healthcheck():
 
 INSERT_SQL = """
 INSERT INTO [{schema}].[{table}]
-    (ScanTimestamp, Station, Operator,
+    (ScanTimestamp, Station, Machine, Operator,
      ScheduleNo, UnitNo, MasterKey, ParentKey,
      OrderNo, BatchNo, BinNo,
      PartCode, PartPosition, PartTotal,
@@ -60,7 +60,7 @@ INSERT INTO [{schema}].[{table}]
      SawFile, ScheduleVersion,
      RawScanValue, ParseOK, ClientScanID, CreatedAt)
 VALUES
-    (?, ?, ?,
+    (?, ?, ?, ?,
      ?, ?, ?, ?,
      ?, ?, ?,
      ?, ?, ?,
@@ -92,7 +92,7 @@ def insert_scan(rec, operator=None, client_scan_id=None, scanned_at=None):
     with _connect() as cn:
         cn.cursor().execute(
             sql,
-            scanned_at, rec.get("station"), operator,
+            scanned_at, rec.get("station"), rec.get("machine"), operator,
             rec.get("schedule_no"), rec.get("unit_no"),
             rec.get("master_key"), rec.get("parent_key"),
             rec.get("order_no"), rec.get("batch_no"), rec.get("bin_no"),

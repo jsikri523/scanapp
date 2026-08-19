@@ -45,6 +45,11 @@ def scan():
 
     rec = scan_parser.parse(raw, station_code=st["code"])
 
+    # Anthony's plan asks for Machine as well as Station. The machine name is
+    # the one printed on the run label, 'JMC SAW 5', so it matches what an
+    # operator or supervisor sees on paper.
+    rec["machine"] = st.get("fenevision_id")
+
     # Work out what to tell the operator BEFORE writing, so the check sees
     # the state of the world without this scan in it.
     #

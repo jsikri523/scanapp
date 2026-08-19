@@ -42,7 +42,15 @@ CREATE TABLE dbo.ScanEvent
     /* When and where -------------------------------------------------- */
     ScanTimestamp       DATETIME2(0)   NOT NULL,   -- UTC, set by the app
     Station             VARCHAR(32)    NOT NULL,   -- 'SAW 5'
-    Operator            VARCHAR(64)    NULL,       -- open item Q2
+    Machine             VARCHAR(32)    NULL,       -- 'JMC SAW 5' as printed on the run label
+    Operator            VARCHAR(64)    NULL,       -- required by Anthony's plan, not yet captured
+    Status              VARCHAR(32)    NULL,       -- required by Anthony's plan. FeneVision
+                                                   -- uses Accepted / Complete / Rejected
+
+    /* Processing duration is on Anthony's list and is NOT a column we can
+       simply fill in. A scan records when a piece was labelled, not when it
+       started. Deriving a duration needs either a second scan or a defined
+       start reference, so it is left out rather than approximated. */
 
     /* From the barcode ------------------------------------------------- */
     /* The QR code returns four backtick delimited numeric segments:
@@ -53,9 +61,21 @@ CREATE TABLE dbo.ScanEvent
        Meanings confirmed by Sahab on 19 August 2026. All nullable, because
        a scan that cannot be parsed is still stored rather than rejected. */
     ScheduleNo          VARCHAR(16)    NULL,       -- 3225
-    UnitNo              VARCHAR(32)    NULL,       -- 237
+    UnitNo              VARCHAR(32)    NULL,       -- 237. FeneVision's Unit, which
+                                                   -- is a WINDOW, not a cut piece.
+                                                   -- Schedule 3192 holds 383 units.
     MasterKey           VARCHAR(32)    NULL,       -- 8156, from FeneVision
-    ParentKey           VARCHAR(32)    NULL,       -- 0, or the parent's key
+    ParentKey           VARCHAR(32)    NULL,       -- 0, or the combination unit this
+                                                   -- one belongs to. FeneVision shows
+                                                   -- unit 523 (Combo Platinum) as the
+                                                   -- parent of units 61, 62, 275,
+                                                   -- 521 and 522.
+
+    /* PartNo is on Anthony's plan alongside Window Number, because the point
+       of scanning at a saw is piece level rather than window level, which is
+       what FeneVision already does. The barcode does not appear to carry it.
+       Nullable until we know whether it can be derived. */
+    PartNo              VARCHAR(32)    NULL,
 
     /* From printed label text ------------------------------------------ */
     /* The QR codes do not carry these. They are here for the fallback path
