@@ -184,11 +184,14 @@ def parse(raw, station_code=None):
         # This is unresolved and is the open question with Sahab: does the
         # unit number identify the window, or the individual piece?
         #
-        # Until it is answered the payload is treated as a scan key only. The
-        # row is always written and never suppressed, so whichever way the
+        # Until it is answered the whole payload is the only safe key, and it
+        # lives in RawScanValue. UnitID is deliberately left null here: it is
+        # the six digit number printed on the label, such as 502258, and the
+        # barcode does not carry it.
+        #
+        # The row is always written and never suppressed, so whichever way the
         # answer falls, history can be recounted from RawScanValue without
         # anything having been lost.
-        out["unit_id"] = text
         out["piece_identified"] = False
 
         return out

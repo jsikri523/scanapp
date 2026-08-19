@@ -53,9 +53,10 @@ def healthcheck():
 INSERT_SQL = """
 INSERT INTO [{schema}].[{table}]
     (ScanTimestamp, Station, Operator,
-     OrderNo, ScheduleNo, BatchNo, BinNo,
+     ScheduleNo, UnitNo, MasterKey, ParentKey,
+     OrderNo, BatchNo, BinNo,
      PartCode, PartPosition, PartTotal,
-     UnitID, ODKey, ProductCode,
+     UnitID, ProductCode,
      SawFile, ScheduleVersion,
      RawScanValue, ParseOK, ClientScanID, CreatedAt)
 VALUES
@@ -63,6 +64,7 @@ VALUES
      ?, ?, ?, ?,
      ?, ?, ?,
      ?, ?, ?,
+     ?, ?,
      ?, ?,
      ?, ?, ?, SYSUTCDATETIME());
 """
@@ -91,10 +93,11 @@ def insert_scan(rec, operator=None, client_scan_id=None, scanned_at=None):
         cn.cursor().execute(
             sql,
             scanned_at, rec.get("station"), operator,
-            rec.get("order_no"), rec.get("schedule_no"),
-            rec.get("batch_no"), rec.get("bin_no"),
+            rec.get("schedule_no"), rec.get("unit_no"),
+            rec.get("master_key"), rec.get("parent_key"),
+            rec.get("order_no"), rec.get("batch_no"), rec.get("bin_no"),
             rec.get("part_code"), rec.get("part_position"), rec.get("part_total"),
-            rec.get("unit_id"), rec.get("odkey"), rec.get("product_code"),
+            rec.get("unit_id"), rec.get("product_code"),
             rec.get("saw_file"), rec.get("schedule_version"),
             rec.get("raw_scan_value"), 1 if rec.get("parse_ok") else 0,
             client_scan_id,
@@ -103,33 +106,40 @@ def insert_scan(rec, operator=None, client_scan_id=None, scanned_at=None):
     return {"stored": True}
 
 
-def scan_already_counted(station, unit_id):
+def scan_already_counted(station, raw_value):
     """
-    Has this piece already been counted at this station?
+    Has this exact payload been seen before at this station?
 
-    The payload identifies the piece (schedule, cut list, line number), so an
-    identical payload means the same physical piece. That covers all three
-    ways a repeat happens: the second code on the same label, a scanner
-    double read, and a genuine rescan on a later day.
+    Matching is on the WHOLE payload, never on UnitNo alone. Observed on the
+    floor on 19 August 2026: in schedule 3236, unit 315 and unit 321 each
+    appear under two different master keys, so the unit number is unique only
+    within its master.
 
-    Used only to decide what the operator screen shows. It never blocks the
-    insert. If we cannot tell, we say no and let the scan through, because a
-    missing scan is worse than a duplicate row the view can drop later.
+    Note what this does and does not tell you. It says the same payload came
+    back. It does NOT say the same physical piece came back, because whether
+    the unit number identifies a window or a single cut piece is still open
+    with Sahab. If it identifies a window, two pieces of that window produce
+    this same payload legitimately.
+
+    So this is used only to label what the operator screen shows. It never
+    blocks the insert and never suppresses a count. If we cannot tell, we say
+    no and let the scan through: a missing scan is worse than an extra row
+    that a view can drop later.
     """
-    if not unit_id:
+    if not raw_value:
         return False
 
     if config.demo_mode:
-        return unit_id in _DEMO["seen"]
+        return raw_value in _DEMO["seen"]
 
     sql = """
         SELECT TOP 1 1
         FROM [{schema}].[{table}]
-        WHERE Station = ? AND UnitID = ?
+        WHERE Station = ? AND RawScanValue = ?
     """.format(schema=config.SCAN_SCHEMA, table=config.SCAN_TABLE)
     try:
         with _connect() as cn:
-            return cn.cursor().execute(sql, station, unit_id).fetchone() is not None
+            return cn.cursor().execute(sql, station, raw_value).fetchone() is not None
     except Exception:
         return False
 
@@ -255,8 +265,8 @@ def _demo_insert(rec, operator, client_scan_id, scanned_at):
     with _DEMO_LOCK:
         _DEMO["scans"].append(dict(rec, operator=operator, scanned_at=scanned_at))
         _demo_persist(rec, operator, scanned_at)
-        if rec.get("unit_id"):
-            _DEMO["seen"].add(rec["unit_id"])
+        if rec.get("raw_scan_value"):
+            _DEMO["seen"].add(rec["raw_scan_value"])
     return {"stored": True, "demo": True}
 
 

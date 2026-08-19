@@ -2,56 +2,72 @@
    scanapp: reporting views
 
    This is where counting happens. The table keeps every scan; these
-   views decide what counts. Keeping the two apart is what lets us
-   fix the double count without losing the audit trail.
+   views decide what counts. Keeping the two apart means the counting
+   rule can change without rescanning anything and without losing the
+   record of what happened on the floor.
    ============================================================ */
 
 /* ------------------------------------------------------------
    WHAT THE BARCODE CONTAINS
-   ------------------------------------------------------------
-   Established by scanning real labels on 17 August 2026.
 
-   The QR payload is backtick delimited:
+   Four backtick delimited numeric segments:
 
-       schedule ` line number ` cut list ` unused
+       3225 ` 237 ` 8156 ` 0
+       schedule ` unit number ` master key ` parent key
 
-   Evidence. Eight labels from schedule 3229, both codes scanned on each:
+   Meanings confirmed by Sahab, 19 August 2026. Which of segments 3
+   and 4 is master and which is parent is still being confirmed by him;
+   the scans support the order above (see below).
 
-       3229`202`8429`0   3229`103`8536`0
-       3229`203`8429`0   3229`104`8536`0
-       3229`204`8429`0   3229`105`8536`0
-       3229`205`8429`0   3229`106`8536`0
+   Observed across 80 real scans, 17 and 19 August 2026:
 
-   Eight distinct payloads, each seen exactly twice, once per duplicate
-   code on its label. Segment 2 runs consecutively within each cut list.
-   Consecutive integers appearing once per physical label is a line
-   number, not a product code.
+   1. The master and parent keys form a hierarchy. In schedule 3236:
 
-   Consistent with two labels from schedule 3225 scanned separately,
-   3225`227`8156`0 (order 42305-1.2) and 3225`237`8156`0 (order 42518-6):
-   same cut list 8156, different line numbers.
+          master 2456  parent 0        20 scans
+          master 8156  parent 0        18 scans
+          master 8385  parent 2456      8 scans
 
-   So schedule + cut list + line number identifies the piece, and the
-   whole payload is a valid deduplication key.
+      8385 sits under 2456. Segment 4 was zero on every scan except
+      those and one mullion label, 2966`81`8746`8492, which is the kind
+      of combination unit that would have a parent.
 
-   NOTE: a label carries the SAME code twice, once at each end of the
-   -W- FRAME -W- band, so a long profile can be scanned from whichever
-   end is nearer. Both produce the same payload, so deduplication counts
-   the piece once. That is intended, not a defect.
+   2. THE UNIT NUMBER IS NOT UNIQUE ON ITS OWN. In schedule 3236, unit
+      315 and unit 321 each appear under two different master keys:
 
-   NOTE: some labels also carry a marketing QR that returns
-   https://www.vinylbilt.com/. It is not delimited, so it parses as
-   unreadable and shows in vw_ScanEvent_Unreadable rather than counting.
+          3236`315`2456`0      3236`315`8385`2456
+          3236`321`2456`0      3236`321`8385`2456
+
+      Over the same 46 scans: 33 distinct payloads, 33 distinct
+      (master, unit) pairs, but only 31 distinct unit numbers. Counting
+      unit numbers alone loses records. Everything below therefore keys
+      on the whole payload.
+
+   3. Master keys are reused across schedules. 8156 appears in both
+      schedule 3225 and schedule 3236.
+
+   4. Some labels carry a marketing QR returning
+      https://www.vinylbilt.com/. It is not delimited, so it parses as
+      unreadable and shows in vw_ScanEvent_Unreadable rather than
+      counting.
+
+   STILL OPEN, and it governs what these views mean:
+   does the unit number identify the WINDOW or the individual CUT PIECE?
+   If it identifies the window, several pieces share a payload and the
+   counted view below is counting windows, not pieces. Nothing here
+   assumes an answer.
    ------------------------------------------------------------ */
 
 
 /* ------------------------------------------------------------
    vw_ScanEvent_Counted
-   One row per piece per station: the FIRST time it was scanned.
+   The FIRST scan of each distinct payload at each station.
 
-   This is the fix for the FeneVision defect where a window rescanned on
-   a later day is counted twice. Repeats stay in the base table and are
-   visible in vw_ScanEvent_Repeats below.
+   Deduplication is on Station plus the whole RawScanValue, never on
+   UnitNo alone, for the reason in note 2 above.
+
+   What one row means depends on the open question. If the unit number
+   is a piece, a row is a piece. If it is a window, a row is a window.
+   Read it as "one distinct label identity, scanned at least once".
    ------------------------------------------------------------ */
 CREATE OR ALTER VIEW dbo.vw_ScanEvent_Counted
 AS
@@ -60,7 +76,7 @@ WITH ranked AS
     SELECT
         s.*,
         ROW_NUMBER() OVER (
-            PARTITION BY s.Station, COALESCE(s.UnitID, s.RawScanValue)
+            PARTITION BY s.Station, s.RawScanValue
             ORDER BY s.ScanTimestamp, s.ScanID
         ) AS rn
     FROM dbo.ScanEvent AS s
@@ -68,9 +84,10 @@ WITH ranked AS
 )
 SELECT
     ScanID, ScanTimestamp, Station, Operator,
-    OrderNo, ScheduleNo, BatchNo, BinNo,
+    ScheduleNo, UnitNo, MasterKey, ParentKey,
+    OrderNo, BatchNo, BinNo,
     PartCode, PartPosition, PartTotal,
-    UnitID, ODKey, ProductCode,
+    UnitID, ProductCode,
     SawFile, ScheduleVersion,
     RawScanValue, ParseOK
 FROM ranked
@@ -80,10 +97,14 @@ GO
 
 /* ------------------------------------------------------------
    vw_ScanEvent_Repeats
-   Everything the counting view dropped: the second code on a label, a
-   scanner double read, or a real rescan. Expect roughly one repeat per
-   piece, because operators scan whichever end is nearer and sometimes
-   both. A piece appearing four or five times is worth looking at.
+   Everything the counting view set aside: a scanner double read, the
+   operator scanning a second code on the same label, or a genuine
+   rescan later.
+
+   Worth watching during the pilot. A high repeat rate is a signal, not
+   a fault: it may mean a label carries several codes with the same
+   payload, or that pieces of one window share a unit number. Both are
+   things we want to learn rather than hide.
    ------------------------------------------------------------ */
 CREATE OR ALTER VIEW dbo.vw_ScanEvent_Repeats
 AS
@@ -91,15 +112,17 @@ WITH ranked AS
 (
     SELECT
         s.ScanID, s.ScanTimestamp, s.Station, s.Operator,
-        s.OrderNo, s.UnitID, s.RawScanValue,
+        s.ScheduleNo, s.UnitNo, s.MasterKey, s.RawScanValue,
         ROW_NUMBER() OVER (
-            PARTITION BY s.Station, COALESCE(s.UnitID, s.RawScanValue)
+            PARTITION BY s.Station, s.RawScanValue
             ORDER BY s.ScanTimestamp, s.ScanID
         ) AS rn
     FROM dbo.ScanEvent AS s
     WHERE s.ParseOK = 1
 )
-SELECT ScanID, ScanTimestamp, Station, Operator, OrderNo, UnitID, RawScanValue, rn AS ScanNumber
+SELECT ScanID, ScanTimestamp, Station, Operator,
+       ScheduleNo, UnitNo, MasterKey, RawScanValue,
+       rn AS ScanNumber
 FROM ranked
 WHERE rn > 1;
 GO
@@ -107,9 +130,10 @@ GO
 
 /* ------------------------------------------------------------
    vw_ScanEvent_Unreadable
-   Scans that were saved but could not be parsed. Should be near zero.
-   If it is not, the parsing assumptions in scan_parser.py are wrong and
-   need correcting against RawScanValue. Nothing is lost either way.
+   Scans that were saved but could not be parsed. Should be near zero
+   apart from the marketing QR. If it is not, the parsing in
+   scan_parser.py is wrong and needs correcting against RawScanValue.
+   Nothing is lost either way, because the raw payload is always kept.
    ------------------------------------------------------------ */
 CREATE OR ALTER VIEW dbo.vw_ScanEvent_Unreadable
 AS
@@ -119,68 +143,56 @@ WHERE ParseOK = 0;
 GO
 
 
-/* ============================================================
-   SAHAB: the piece below is the one I need your help with.
-
-   The operator screen needs to know, for a station:
-     - which saw file is being cut now
-     - how many pieces are in it
-     - how many have been scanned
-     - what is queued after it
-
-   The scan side of that (PieceScanned) comes from the view above.
-   The schedule side (which files, in what order, how many pieces each)
-   has to come from wherever the production schedule lives. That source
-   is open item Q9 and I do not know the answer yet.
-
-   Below is the shape the application expects. Once you point the
-   schedule half at the right source, the app needs no further change:
-   db.get_station_status() is a single SELECT against this.
-   ============================================================ */
-
-/*
-CREATE OR ALTER VIEW dbo.vw_StationSchedule
+/* ------------------------------------------------------------
+   vw_ScanEvent_MasterTree
+   The master and parent structure as the scans see it. Useful for
+   confirming which segment is master and which is parent, and for
+   showing what a parent groups together.
+   ------------------------------------------------------------ */
+CREATE OR ALTER VIEW dbo.vw_ScanEvent_MasterTree
 AS
 SELECT
-    sch.Station,
-    sch.SawFile,
-    sch.ScheduleNo,
-    sch.PieceTotal,
-    COALESCE(scanned.PieceScanned, 0)  AS PieceScanned,
-    sch.Sequence,
-    CASE
-        WHEN COALESCE(scanned.PieceScanned, 0) >= sch.PieceTotal THEN 'done'
-        WHEN sch.Sequence = (
-                SELECT MIN(s2.Sequence)
-                FROM <schedule source> AS s2
-                WHERE s2.Station = sch.Station
-                  AND COALESCE(
-                        (SELECT COUNT(*) FROM dbo.vw_ScanEvent_Counted d2
-                         WHERE d2.Station = s2.Station AND d2.SawFile = s2.SawFile), 0
-                      ) < s2.PieceTotal
-             ) THEN 'cur'
-        ELSE 'next'
-    END AS State
-FROM <schedule source> AS sch
-LEFT JOIN (
-    SELECT Station, SawFile, COUNT(*) AS PieceScanned
-    FROM dbo.vw_ScanEvent_Counted
-    GROUP BY Station, SawFile
-) AS scanned
-    ON scanned.Station = sch.Station
-   AND scanned.SawFile = sch.SawFile;
+    ScheduleNo,
+    MasterKey,
+    ParentKey,
+    COUNT(*)                    AS Scans,
+    COUNT(DISTINCT UnitNo)      AS DistinctUnits,
+    MIN(ScanTimestamp)          AS FirstSeen,
+    MAX(ScanTimestamp)          AS LastSeen
+FROM dbo.ScanEvent
+WHERE ParseOK = 1 AND MasterKey IS NOT NULL
+GROUP BY ScheduleNo, MasterKey, ParentKey;
 GO
-*/
 
 
-/* ------------------------------------------------------------
-   Remakes.
+/* ============================================================
+   THE SCHEDULE SIDE
 
-   Agreed verbally on 10 August and still unowned: mark remakes with a
-   dash one, dash two suffix so a recut piece does not read as the
-   original. Order numbers already carry a suffix on the label
-   (42305-1.2), so confirm with Daniel whether that is the same thing
-   before building a second mechanism for it.
+   The operator screen needs to know, for a station: which saw file is
+   being cut, how many labels are in it, how many have been scanned,
+   and what is queued next.
 
-   Left unimplemented deliberately rather than guessed at.
-   ------------------------------------------------------------ */
+   The scan half comes from vw_ScanEvent_Counted above.
+
+   The schedule half does NOT need the database. Established 19 August
+   2026 by comparing a printed run label against the machine's own
+   schedule folder:
+
+       run label:  SCHEDULE 3225 / 208 Labels / 4 Parts / JMC SAW 5
+       SAW 5 copy of schedule 3225: 208 csv rows, 4 part prefixes
+                                    (03, 03F, 05, 05F)
+
+   One label per csv row. Each machine holds its own portion of a
+   schedule, refreshed daily, and the row count is the label count. So
+   the denominator can be read straight off the machine folder.
+
+   Two things to note before relying on it:
+     - a schedule is split across machines, and the same schedule has
+       different content and different row counts on each
+     - it is not yet confirmed that labels at a given station belong to
+       that station. Labels scanned on 19 August came from schedules
+       held by SAW 3, JSAW and SAW 2, not SAW 5
+
+   Nothing is built against this yet, because whether a row is a piece
+   or a window is the same open question as above.
+   ============================================================ */

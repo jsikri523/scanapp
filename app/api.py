@@ -54,7 +54,7 @@ def scan():
     # before and nothing more. It is still written and still counted. The
     # decision about what counts belongs in the reporting view, where it can
     # be changed without rescanning anything.
-    already = db.scan_already_counted(st["code"], rec.get("unit_id"))
+    already = db.scan_already_counted(st["code"], rec.get("raw_scan_value"))
 
     try:
         db.insert_scan(rec, operator=operator, client_scan_id=client_scan_id)
