@@ -221,3 +221,15 @@ main{flex:1;min-height:0}
   main{grid-template-columns:1fr}
   .slotbig{font-size:clamp(56px,16vw,96px)}
 }
+
+/* Shown only when the server reports that status figures cannot be trusted.
+   Deliberately quiet: it must not compete with the scan state for attention. */
+.statuswarn {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid #b8860b;
+  background: #fdf6e3;
+  color: #6b5300;
+  font-size: 0.95rem;
+}
+.statuswarn[hidden] { display: none; }

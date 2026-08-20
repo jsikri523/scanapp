@@ -12,10 +12,14 @@ Two rules run through all of this:
      judgement of its own about what a scan means.
 """
 
+import logging
+
 from flask import Blueprint, jsonify, request
 
 from config import config
 from . import db, scan_parser
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__)
 
@@ -63,12 +67,17 @@ def scan():
 
     try:
         db.insert_scan(rec, operator=operator, client_scan_id=client_scan_id)
-    except Exception as exc:
+    except Exception:
         # The tablet will queue this and retry. Do not pretend it worked.
+        #
+        # Detail is logged, never returned. Driver and pyodbc messages routinely
+        # carry the server address, database name and file paths, and this
+        # response goes to an unauthenticated page on the plant network.
+        log.exception("Scan not stored. station=%s client_scan_id=%s",
+                      station_key, client_scan_id)
         return jsonify({
             "state": "error",
             "message": "Scan not saved. It will be sent again automatically.",
-            "detail": str(exc),
         }), 503
 
     status = db.get_station_status(st["code"])
@@ -160,5 +169,10 @@ def issue():
     try:
         db.insert_scan(rec, operator=body.get("operator"))
     except Exception:
-        pass
+        # Do not claim it was recorded when it was not.
+        log.exception("Issue report not stored. station=%s", station_key)
+        return jsonify({
+            "ok": False,
+            "message": "Issue not recorded. Tell your supervisor directly.",
+        }), 503
     return jsonify({"ok": True})

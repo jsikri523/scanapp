@@ -17,3 +17,7 @@ __pycache__/
 
 # Packaging artefacts
 *.zip
+
+# Local remediation backups. The before-state lives in git history.
+*.bak
+*.preremediation

@@ -1,0 +1,26 @@
+scanapp deployment package manifest
+package: scanapp_deploy_20260820_v2.zip
+built:   2026-08-20
+files:   20
+
+PATH                                             BYTES  SHA-256
+README.md                                        16821  6a14d50f342fc68d60601c8794f2baa12b5dce125f5d2fbf6da7f6c938021fce
+.gitignore                                         432  42066d4c909f9d55198f41064c91b4483d88a225e861c55a3e33a1128867b84b
+config.py                                         2981  e6dc8e3d263c754e0cd19acce717b29d43d02573d16523ca48ea25498f462694
+wsgi.py                                            668  6394fa0f6268180677a83b222f45f7098100d4a5c825f64a6bb6e7e4261dcfde
+requirements.txt                                   175  9763f4a4fd03060213c65a86c0988fa4a825a4573dacdff76977fd7ae941320a
+ingest_capture.py                                 2656  d861440eeb38afe353cb2634ca05c2cade894d1b83dad94a77a7d4cc1791f2c3
+app/__init__.py                                   1375  c91a101605b20782394c1c9b01af2f352dabd0968a87753190c1afaaaa82282f
+app/routes.py                                     1080  b63767d9bc628c0bfe845be3a5a24db9f465ee0c894189d832c9ac8da9a6f4e1
+app/api.py                                        6307  626ddbfb1a8543ebc99cb9fdb9d35cd88c2e6fbfc547d88ce31069ffcaf1e894
+app/db.py                                        14985  27ea6bb9c56eb1e081df7a9f9616b9a0b8e4c85ab9b601de1b89ef43bf6f792b
+app/scan_parser.py                                8894  6ce9b672302e7891c77a040716415aced24b6d49fe509c41e56e04f2b0cd535b
+app/static/scanapp.css                           11928  349091939080d918f0837966ab4511bec8bc14eff63f0d8d2a4aabd99d799178
+app/static/scanapp.js                            13337  83dca2b20ebc46827785cfe7dde8e94e83c0f9804aa2d3f054910bca8acaee87
+app/templates/index.html                          1252  5c4dfb84517c8e85eeae5aadc005e41d06ad2ef5721b061eb8e00251f0cbd355
+app/templates/station.html                        5026  3eabe9109511cdc5a65567a9fe03c7e322b71d17718d7a601b6f5d6a956afb4c
+deploy/scanapp.service                            2448  b4212d4f05dfe571344875483001d94a395242f2eb2a6ac86c0bb4c9681926ad
+deploy/nginx-scanapp.conf                         1413  09bd2f5e5e948ebc691cc53f7e45665c9c6791a56080e8bdd94db093c152ddd5
+sql/001_create_scan_table.sql                     6496  b6fb58ce536f41708152a7656d7bedf8b2d3b460c35b8821b09791cac6d4791a
+sql/002_views.sql                                 7447  04c7b9c348de9776da354058157ff86e73a30a2ea331b836513e747552c86763
+tests/test_predeployment.py                      23130  ff5293005ef85c2635048d0220a0fe7283a6e399881084d96100b5fc9a860869

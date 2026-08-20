@@ -11,10 +11,35 @@ sample data so the operator screen can be demonstrated before the table exists.
 
 import datetime
 import json
+import logging
 import os
 import threading
 
 from config import config
+
+log = logging.getLogger(__name__)
+
+
+class PersistenceError(RuntimeError):
+    """Raised when a scan could not be written durably."""
+
+
+def _utcnow():
+    """Timezone-aware UTC. datetime.utcnow() is deprecated from Python 3.12."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _naive_utc(dt):
+    """
+    Drop the offset for consumers that expect the previous naive UTC shape.
+
+    The JSONL capture file and the SQL ScanTimestamp column have carried naive
+    UTC since the start ('2026-08-19T19:27:56'). Keeping that shape means this
+    change stays internal and nothing already written has to be re-read.
+    """
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
 try:
     import pyodbc
@@ -43,7 +68,8 @@ def healthcheck():
             cn.cursor().execute("SELECT 1").fetchone()
         return {"ok": True, "mode": "sql"}
     except Exception as exc:
-        return {"ok": False, "mode": "sql", "error": str(exc)}
+        log.error("Healthcheck failed against SQL. error=%s", exc)
+        return {"ok": False, "mode": "sql", "error": "database unavailable"}
 
 
 # ----------------------------------------------------------------------
@@ -83,7 +109,7 @@ def insert_scan(rec, operator=None, client_scan_id=None, scanned_at=None):
     queue can retry safely: replaying the same scan twice is harmless because
     the reporting view ignores the second copy.
     """
-    scanned_at = scanned_at or datetime.datetime.utcnow()
+    scanned_at = scanned_at or _utcnow()
 
     if config.demo_mode:
         return _demo_insert(rec, operator, client_scan_id, scanned_at)
@@ -92,7 +118,7 @@ def insert_scan(rec, operator=None, client_scan_id=None, scanned_at=None):
     with _connect() as cn:
         cn.cursor().execute(
             sql,
-            scanned_at, rec.get("station"), rec.get("machine"), operator,
+            _naive_utc(scanned_at), rec.get("station"), rec.get("machine"), operator,
             rec.get("schedule_no"), rec.get("unit_no"),
             rec.get("master_key"), rec.get("parent_key"),
             rec.get("order_no"), rec.get("batch_no"), rec.get("bin_no"),
@@ -140,7 +166,12 @@ def scan_already_counted(station, raw_value):
     try:
         with _connect() as cn:
             return cn.cursor().execute(sql, station, raw_value).fetchone() is not None
-    except Exception:
+    except Exception as exc:
+        # Cannot tell. Say no and let the scan through: a missing scan is worse
+        # than an extra row a view can drop later. Still logged, because a
+        # persistently failing duplicate check is a real fault.
+        log.warning("Duplicate check failed, treating scan as new. station=%s error=%s",
+                    station, exc)
         return False
 
 
@@ -185,24 +216,49 @@ def get_station_status(station_code):
         ORDER BY Sequence
     """.format(schema=config.SCAN_SCHEMA, view=config.SCAN_VIEW)
 
-    with _connect() as cn:
-        rows = cn.cursor().execute(sql, station_code).fetchall()
+    # A missing view, an unreachable server, a renamed schema or a changed
+    # column must not take the operator screen down. An operator staring at a
+    # blank tablet cannot scan, and losing scans is worse than losing counts.
+    try:
+        with _connect() as cn:
+            rows = cn.cursor().execute(sql, station_code).fetchall()
+    except Exception as exc:
+        log.error(
+            "Station status query failed, serving unavailable state. station=%s schema=%s view=%s error=%s",
+            station_code, config.SCAN_SCHEMA, config.SCAN_VIEW, exc,
+        )
+        return _unavailable_status("Database status unavailable.")
 
-    schedules = [
-        {
-            "file": r.SawFile,
-            "schedule_no": r.ScheduleNo,
-            "total": r.PieceTotal,
-            "scanned": r.PieceScanned,
-            "state": r.State,
-        }
-        for r in rows
-    ]
+    try:
+        schedules = [
+            {
+                "file": r.SawFile,
+                "schedule_no": r.ScheduleNo,
+                "total": r.PieceTotal,
+                "scanned": r.PieceScanned,
+                "state": r.State,
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        # The view exists but does not have the columns this code expects.
+        log.error(
+            "Station status view returned unexpected columns. station=%s view=%s error=%s",
+            station_code, config.SCAN_VIEW, exc,
+        )
+        return _unavailable_status("Database status unavailable.")
+
     return _shape_status(schedules)
 
 
-def _shape_status(schedules):
-    """Common shaping so demo and SQL paths return identical structures."""
+def _shape_status(schedules, status_available=True, status_message=None):
+    """
+    Common shaping so demo and SQL paths return identical structures.
+
+    status_available says whether the figures in this payload can be trusted.
+    It is True in demo mode, where the capture file is the source, and False
+    only when the SQL read failed and no counts could be produced.
+    """
     current = next((s for s in schedules if s["state"] == "cur"), None)
     done_count = sum(1 for s in schedules if s["state"] == "done")
     return {
@@ -210,7 +266,19 @@ def _shape_status(schedules):
         "current": current,
         "done_count": done_count,
         "total_schedules": len(schedules),
+        "status_available": status_available,
+        "status_message": status_message,
     }
+
+
+def _unavailable_status(message):
+    """
+    Safe fallback so the station page keeps working when SQL is not usable.
+
+    Reports no counts rather than wrong ones, and says why. Scanning continues:
+    scan capture does not depend on this read path.
+    """
+    return _shape_status([], status_available=False, status_message=message)
 
 
 # ----------------------------------------------------------------------
@@ -250,21 +318,41 @@ _DEMO_CAPTURE = os.path.join(
 
 
 def _demo_persist(rec, operator, scanned_at):
+    """
+    Append one scan to the capture file, or raise.
+
+    In demo mode this file is the ONLY durable record. Everything else lives
+    in process memory and dies with the worker. A failure here is therefore a
+    lost scan and must never be swallowed: it is logged at ERROR and raised,
+    the API turns it into a 503, and the tablet queues the scan and retries.
+
+    On the server this runs as www-data, so /var/www/apps/scanapp must be
+    owned by www-data. See the ownership step in the README.
+    """
+    row = {k: v for k, v in rec.items()}
+    row["operator"] = operator
+    row["scanned_at"] = _naive_utc(scanned_at).isoformat(timespec="seconds")
     try:
-        row = {k: v for k, v in rec.items()}
-        row["operator"] = operator
-        row["scanned_at"] = scanned_at.isoformat(timespec="seconds")
         with open(_DEMO_CAPTURE, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
-    except Exception:
-        # Capture is a convenience. Never let it break a scan.
-        pass
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        log.error(
+            "DEMO CAPTURE WRITE FAILED, scan not durably stored. path=%s error=%s. Check that %s is writable by the service user (www-data).",
+            _DEMO_CAPTURE, exc, os.path.dirname(_DEMO_CAPTURE),
+        )
+        raise PersistenceError("demo capture file could not be written") from exc
 
 
 def _demo_insert(rec, operator, client_scan_id, scanned_at):
     with _DEMO_LOCK:
-        _DEMO["scans"].append(dict(rec, operator=operator, scanned_at=scanned_at))
+        # Durable write FIRST. If it raises, nothing below runs, so neither the
+        # scan count nor the duplicate set is advanced for a scan that was not
+        # actually stored. The caller turns the exception into a 503 and the
+        # tablet queues it, so the operator is never told it was captured.
         _demo_persist(rec, operator, scanned_at)
+        _DEMO["scans"].append(dict(rec, operator=operator, scanned_at=scanned_at))
         if rec.get("raw_scan_value"):
             _DEMO["seen"].add(rec["raw_scan_value"])
     return {"stored": True, "demo": True}

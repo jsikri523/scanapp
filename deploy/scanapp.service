@@ -1,35 +1,56 @@
 # /etc/systemd/system/scanapp.service
-# Matches the pattern used by the other AppX apps on vb-wappx01-of.
+#
+# Matches the pattern the four existing AppX apps use on vb-wappx01-of,
+# confirmed from the server on 20 August 2026.
 #
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now scanapp
 #   sudo systemctl status scanapp
+#
+# NOTE: do NOT add RuntimeDirectory=gunicorn here. /run/gunicorn is created by
+# /etc/tmpfiles.d/gunicorn.conf (d /run/gunicorn 0755 www-data www-data -) and
+# is shared by labelapp, locationapp, signapp and logoapp. systemd deletes a
+# RuntimeDirectory when its unit stops, so declaring it here would remove the
+# other four apps' sockets every time scanapp restarted.
 
 [Unit]
-Description=scanapp (SAW 5 scanning)
+Description=scanapp (Gunicorn via Unix Socket)
 After=network.target
 
 [Service]
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/apps/scanapp
+Environment="PATH=/var/www/apps/scanapp/venv/bin"
 
 # Leave SCANAPP_DB_DSN unset to run in demo mode with no database.
-# Confirm the server address before setting this: review documents record
-# 10.60.0.21, the running AppX apps connect to 10.0.0.21 (open item E4.4).
+# Confirmed 20 Aug 2026: the four existing apps all use
+# DRIVER={ODBC Driver 18 for SQL Server}; SERVER=10.0.0.21,1433; DATABASE=FVMaster
+# and the server reaches 10.0.0.21:1433. 10.60.0.21 appears nowhere on the box.
+# They all connect as UID=sa. scanapp must NOT do that; ask Sahab for an account
+# scoped to insert into the scan table only.
 Environment="SCANAPP_SECRET_KEY=change-me"
 # Environment="SCANAPP_DB_DSN=DRIVER={ODBC Driver 18 for SQL Server};SERVER=10.0.0.21,1433;DATABASE=FVMaster;UID=scanapp;PWD=...;TrustServerCertificate=yes"
 
-RuntimeDirectory=gunicorn
+# WORKERS: exactly 1 while ScanApp runs in demo mode.
+# Demo state (_DEMO in app/db.py) lives in module globals guarded by a
+# threading.Lock. Gunicorn forks workers, so each worker would hold its own
+# independent copy: counts would jump between refreshes and duplicate detection
+# would miss roughly half of all repeats. Raise above 1 only once state is held
+# in SQL rather than in the process.
+#
+# Keep this comment ABOVE the ExecStart directive. Comments interleaved between
+# line-continuation backslashes are parsed differently across systemd versions,
+# and a unit file is the wrong place to depend on that.
 ExecStart=/var/www/apps/scanapp/venv/bin/gunicorn \
-    --workers 3 \
+    --workers 1 \
     --bind unix:/run/gunicorn/scanapp.sock \
-    --umask 007 \
     --access-logfile - \
-    --error-logfile - \
     wsgi:application
 
 Restart=always
+# Without this systemd retries every 100ms and burns the default start
+# limit (5 starts in 10s), after which the unit stays failed until reset.
 RestartSec=5
 
 [Install]

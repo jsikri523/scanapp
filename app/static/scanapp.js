@@ -129,6 +129,22 @@
     // percentage: progress against a schedule needs the day's real schedule
     // off the machine, and a decision on whether a scan counts a piece or a
     // window. Neither is settled, so neither is shown.
+    // The server says whether these figures can be trusted. When the database
+    // read fails it returns no counts rather than wrong ones, and the operator
+    // is told so instead of being shown stale numbers. Scanning still works:
+    // capture does not depend on this read path.
+    var warn = $("statusWarn");
+    if (st.status_available === false) {
+      $("cDone").textContent = "—";
+      $("cLeft").textContent = "—";
+      if (warn) {
+        warn.textContent = st.status_message || "Database status unavailable.";
+        warn.hidden = false;
+      }
+      return;
+    }
+    if (warn) { warn.hidden = true; }
+
     if (st.capture) {
       $("cDone").textContent = st.capture.scans;
       $("cLeft").textContent = st.capture.units;
