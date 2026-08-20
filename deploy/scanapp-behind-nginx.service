@@ -1,35 +1,28 @@
 # /etc/systemd/system/scanapp.service
 #
-# PORT-BOUND VARIANT. This is the one to deploy now.
+# NGINX-FRONTED VARIANT. Not the one to deploy first.
 #
-# It listens on TCP 8081 directly and does not go through nginx, so
-# /etc/nginx/sites-available/appx-router is never edited and /run/gunicorn is
-# never touched. The four existing apps (labelapp, locationapp, signapp,
-# logoapp) share both of those, and this variant stays out of both.
+# This binds a unix socket in the shared /run/gunicorn directory and expects the
+# location block from deploy/nginx-scanapp.conf to be present in
+# /etc/nginx/sites-available/appx-router.
 #
-# Port 8081 confirmed free on vb-wappx01-of by the audit of 20 August 2026.
-# The box listens on 22, 53, 555, 556, 8080, 10000 and 10050.
+# Use this only once Addison is in the loop and you are ready to edit the shared
+# router. Until then install deploy/scanapp.service, which binds TCP 8081 and
+# touches neither /run/gunicorn nor nginx.
 #
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now scanapp
-#   sudo systemctl status scanapp
+# Install as scanapp.service:
+#   sudo cp deploy/scanapp-behind-nginx.service /etc/systemd/system/scanapp.service
 #
-# URL:  http://10.50.0.101:8081/station/saw5
+# URL:  http://10.50.0.101:8080/scanapp/station/saw5
 #
-# No X-Script-Name is needed here. The app is served at the root of its own
-# port, so url_for() emits correct root-relative paths with no prefix involved.
-#
-# When Addison is in the loop and this moves behind the router, install
-# deploy/scanapp-behind-nginx.service instead and add the location block from
-# deploy/nginx-scanapp.conf. Do not run both.
-#
-# NOTE: do NOT add RuntimeDirectory=gunicorn to either variant. /run/gunicorn
-# is created by /etc/tmpfiles.d/gunicorn.conf (d /run/gunicorn 0755 www-data
-# www-data -) and is shared. systemd deletes a RuntimeDirectory when its unit
-# stops, which would remove the other four apps' sockets on every restart.
+# NOTE: do NOT add RuntimeDirectory=gunicorn. /run/gunicorn is created by
+# /etc/tmpfiles.d/gunicorn.conf (d /run/gunicorn 0755 www-data www-data -) and
+# is shared by labelapp, locationapp, signapp and logoapp. systemd deletes a
+# RuntimeDirectory when its unit stops, which would remove all four of their
+# sockets every time scanapp restarted.
 
 [Unit]
-Description=scanapp (SAW 5 scanning, port 8081)
+Description=scanapp (Gunicorn via Unix Socket)
 After=network.target
 
 [Service]
@@ -59,7 +52,7 @@ Environment="SCANAPP_SECRET_KEY=change-me"
 # and a unit file is the wrong place to depend on that.
 ExecStart=/var/www/apps/scanapp/venv/bin/gunicorn \
     --workers 1 \
-    --bind 0.0.0.0:8081 \
+    --bind unix:/run/gunicorn/scanapp.sock \
     --access-logfile - \
     wsgi:application
 

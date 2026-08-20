@@ -1,11 +1,11 @@
 scanapp deployment package manifest
-package: scanapp_deploy_20260820_v2.zip
+package: scanapp_deploy_20260820_v3.zip
 built:   2026-08-20
-files:   20
+files:   21
 
 PATH                                             BYTES  SHA-256
-README.md                                        16821  6a14d50f342fc68d60601c8794f2baa12b5dce125f5d2fbf6da7f6c938021fce
-.gitignore                                         432  42066d4c909f9d55198f41064c91b4483d88a225e861c55a3e33a1128867b84b
+README.md                                        19904  27f830bb33b2a8565b6c5a4334734dc68213ed4781880e893ddaf5f687983575
+.gitignore                                         524  b893470d16a000666472c95cbca77a501335aeae04364f5da64b8df6337c5763
 config.py                                         2981  e6dc8e3d263c754e0cd19acce717b29d43d02573d16523ca48ea25498f462694
 wsgi.py                                            668  6394fa0f6268180677a83b222f45f7098100d4a5c825f64a6bb6e7e4261dcfde
 requirements.txt                                   175  9763f4a4fd03060213c65a86c0988fa4a825a4573dacdff76977fd7ae941320a
@@ -19,8 +19,9 @@ app/static/scanapp.css                           11928  349091939080d918f0837966
 app/static/scanapp.js                            13337  83dca2b20ebc46827785cfe7dde8e94e83c0f9804aa2d3f054910bca8acaee87
 app/templates/index.html                          1252  5c4dfb84517c8e85eeae5aadc005e41d06ad2ef5721b061eb8e00251f0cbd355
 app/templates/station.html                        5026  3eabe9109511cdc5a65567a9fe03c7e322b71d17718d7a601b6f5d6a956afb4c
-deploy/scanapp.service                            2448  b4212d4f05dfe571344875483001d94a395242f2eb2a6ac86c0bb4c9681926ad
+deploy/scanapp.service                            3134  e3d1ce628f5b7e1cfd63b62b03d0eca210d505bd7d8a869397e56cfd7eb8da8f
+deploy/scanapp-behind-nginx.service               2816  a1a6a9a5122c13268e840b791c1ddc2abf40cd5a7a7e884a9907d43be90b0366
 deploy/nginx-scanapp.conf                         1413  09bd2f5e5e948ebc691cc53f7e45665c9c6791a56080e8bdd94db093c152ddd5
 sql/001_create_scan_table.sql                     6496  b6fb58ce536f41708152a7656d7bedf8b2d3b460c35b8821b09791cac6d4791a
 sql/002_views.sql                                 7447  04c7b9c348de9776da354058157ff86e73a30a2ea331b836513e747552c86763
-tests/test_predeployment.py                      23130  ff5293005ef85c2635048d0220a0fe7283a6e399881084d96100b5fc9a860869
+tests/test_predeployment.py                      25854  41a3b0cc37d7aa83327f128d6d2378bbfdd15f5b2d4f6a7ae87103f2e584c70a

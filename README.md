@@ -19,7 +19,7 @@ These are separate deployments with separate risks. Do not run them together.
 
 | Stage | What it proves | Database | Gunicorn workers | Gate |
 |---|---|---|---|---|
-| **1. Platform-path test** | The app installs, starts, is reachable through the router, and the tablet can open it. One or two throwaway scans | none, demo mode | **1** | Pre-deployment checklist complete |
+| **1. Platform-path test** | The app installs, starts, is reachable on TCP 8081, and the tablet can open it. One or two throwaway scans | none, demo mode | **1** | Pre-deployment checklist complete |
 | **2. Controlled demo capture test** | A known set of labels produces a known set of rows in `scans_captured.jsonl`. This is the test that answers what the QR codes contain | none, demo mode | **1** | Stage 1 passed, capture file confirmed writing |
 | **3. Real SAW 5 capture session** | A production shift of scanning at the station | none, demo mode | **1** | Stage 2 passed, and a decision that demo-mode file capture is acceptable as the record |
 | **4. Production database deployment** | Scans land in SQL Server | `SCANAPP_DB_DSN` set | 1, until shared state is verified | Sahab's table and view exist, and the read path has been tested against them |
@@ -101,8 +101,9 @@ app/templates/          station.html is the operator screen
 app/static/             scanapp.css, scanapp.js
 sql/001_create_scan_table.sql
 sql/002_views.sql       counting, deduping, and the schedule view for Sahab
-deploy/scanapp.service  systemd unit
-deploy/nginx-scanapp.conf
+deploy/scanapp.service              systemd unit, TCP 8081 (deploy this)
+deploy/scanapp-behind-nginx.service systemd unit, unix socket (for later)
+deploy/nginx-scanapp.conf           router block, pairs with the above
 ```
 
 `sql/` and `ingest_capture.py` are shipped for reference. Neither is executed by
@@ -189,7 +190,8 @@ Verified on the tablet at SAW 5 on 19 August 2026.
 Confirmed about `vb-wappx01-of` from the audit on 20 August 2026: Python 3.12.3,
 `ODBC Driver 18 for SQL Server` installed, nginx 1.24.0 listening on **8080
 only**, `/run/gunicorn` created by `/etc/tmpfiles.d/gunicorn.conf` and shared by
-all apps, apps owned `www-data:www-data`.
+all apps, apps owned `www-data:www-data`, and TCP **8081 free** (the box listens
+on 22, 53, 555, 556, 8080, 10000 and 10050).
 
 > Run the pre-deployment checklist and capture a baseline first. The checklist,
 > the stage verdicts and the package manifest are in
@@ -197,15 +199,36 @@ all apps, apps owned `www-data:www-data`.
 > **project folder alongside this repository, not inside the deployment
 > package**. Read it before running anything below.
 
+### Two unit files. Install the first one.
+
+| File | Binds | Touches nginx? | Touches `/run/gunicorn`? | When |
+|---|---|---|---|---|
+| `deploy/scanapp.service` | TCP `0.0.0.0:8081` | **No** | **No** | **Now** |
+| `deploy/scanapp-behind-nginx.service` | `unix:/run/gunicorn/scanapp.sock` | Yes | Yes | Later, once Addison is in the loop |
+
+The port-bound variant exists so ScanApp can run on the server without editing
+`appx-router` or writing into the shared socket directory. Both of those are
+shared by labelapp, locationapp, signapp and logoapp, and the platform is
+Addison's. Staying out of both means this deployment cannot affect them, and it
+means the conversation with him can happen on its own timetable rather than
+being forced by a config change.
+
+**Do not install both.**
+
+### Steps
+
 ```bash
 # 1. install the files
 sudo mkdir -p /var/www/apps/scanapp
-sudo python3 -m zipfile -e /tmp/scanapp_deploy_20260820_v2.zip /var/www/apps/scanapp/
+sudo python3 -m zipfile -e /tmp/scanapp_deploy_20260820_v3.zip /var/www/apps/scanapp/
 
-# 2. OWNERSHIP. Not optional.
+# 2. OWNERSHIP. Not optional, and type this line rather than pasting it.
 #    The service runs as www-data and must be able to CREATE
 #    scans_captured.jsonl in this directory. Without this the capture file is
 #    never written and, in demo mode, every scan is lost.
+#
+#    If this path is mistyped as /var/www/apps it rewrites ownership across all
+#    four production apps. That is the single highest-risk keystroke here.
 sudo chown -R www-data:www-data /var/www/apps/scanapp
 ls -ld /var/www/apps/scanapp        # must show www-data www-data
 
@@ -222,43 +245,60 @@ sudo -u www-data venv/bin/python -c "from app import create_app; c=create_app().
 sudo cp deploy/scanapp.service /etc/systemd/system/
 grep -c RuntimeDirectory /etc/systemd/system/scanapp.service   # active directive must be absent
 grep -- --workers /etc/systemd/system/scanapp.service          # must be 1
+grep -- --bind /etc/systemd/system/scanapp.service             # must be 0.0.0.0:8081
 sudo systemctl daemon-reload
 sudo systemctl enable --now scanapp
-ls -la /run/gunicorn/               # scanapp.sock added, the other four still present
+sudo systemctl status scanapp --no-pager
 
-# 6. nginx. Edit sites-available, NOT the sites-enabled symlink: an editor that
-#    replaces rather than writes in place would turn the symlink into a regular
-#    file and desynchronise the two directories.
+# 6. verify, and confirm nothing shared moved
+ss -tlnp | grep 8081                 # scanapp listening
+ls -la /run/gunicorn/                # the four sockets, unchanged, no scanapp.sock
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/station/saw5
+```
+
+There is no nginx step. `appx-router` is never opened.
+
+### The URL
+
+**Currently the URL to test is:**
+
+```
+http://10.50.0.101:8081/station/saw5
+```
+
+**No trailing slash after `saw5`.** With a trailing slash Flask returns 404 for
+this route shape, and it does not redirect.
+
+Served at the root of its own port, so no prefix is involved and `url_for()`
+emits correct paths with no `X-Script-Name` header needed.
+
+> **Unverified.** This URL has never been requested. It is derived from the
+> audit, not from a successful load. It is confirmed only when a browser opens
+> it, and the tablet path is confirmed only when the tablet on plant Wi-Fi
+> opens it.
+
+### Later: moving behind the router
+
+Once Addison knows ScanApp exists and you want the tidy path, install
+`deploy/scanapp-behind-nginx.service` as `scanapp.service` instead and add the
+location block from `deploy/nginx-scanapp.conf` to
+`/etc/nginx/sites-available/appx-router`. Edit **sites-available**, not the
+`sites-enabled` symlink: an editor that replaces rather than writes in place
+would turn the symlink into a regular file and desynchronise the two
+directories.
+
+```bash
 sudo cp /etc/nginx/sites-available/appx-router /etc/nginx/sites-available/appx-router.bak-$(date +%Y%m%d-%H%M)
-sudo nano /etc/nginx/sites-available/appx-router     # add the block from deploy/nginx-scanapp.conf
+sudo nano /etc/nginx/sites-available/appx-router
 diff /etc/nginx/sites-available/appx-router.bak-<exact-name> /etc/nginx/sites-available/appx-router
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
 The `diff` matters more than `nginx -t`. A syntax error is caught by `nginx -t`;
-an edit that is valid but touches a neighbouring `location` block is not. **The
-diff must show only added lines.**
-
-### The tablet URL
-
-**Currently the URL to test is:**
-
-```
-http://10.50.0.101:8080/scanapp/station/saw5
-```
-
-**No trailing slash after `saw5`.** With a trailing slash Flask returns 404 for
-this route shape, and it does not redirect.
-
-`http://.../scanapp` without a trailing slash also returns 404, because it does
-not match `location /scanapp/` and the router has no catch-all. Only
-`/scanapp/...` works. The other four apps behave the same way.
-
-> **Unverified.** This URL has never been requested. It is derived from the
-> audit, not from a successful load. It is confirmed only when a browser opens
-> it, and the tablet path is confirmed only when the tablet on plant Wi-Fi opens
-> it.
+an edit that is valid but clips a neighbouring `location` block is not. **The
+diff must show only added lines.** The URL then becomes
+`http://10.50.0.101:8080/scanapp/station/saw5`.
 
 ```
 https://appx.vinylbilt.com/scanapp/station/saw5
@@ -272,22 +312,37 @@ https://appx.vinylbilt.com/scanapp/station/saw5
 > that, and whether the tablet subnet can reach it, is an open question for
 > Sahab. Do not put this URL on the tablet until it is answered.
 
+## Security posture of the port-bound deployment
+
+State it plainly rather than discover it later. None of this is new except
+where noted; it is the same exposure the laptop already had at the saw.
+
+| Risk | Severity | Detail |
+|---|---|---|
+| No authentication on any endpoint | Medium | Anyone who can reach 8081 can POST scans. With a dedicated port it is more discoverable than behind the router |
+| No host firewall | Medium | ufw inactive, iptables ACCEPT on all chains, no nftables, no fail2ban. An open port is reachable by anything routing to 10.50.0.101 |
+| Plaintext HTTP | Low | Payloads are schedule and unit numbers. Not personal or financial data, but unencrypted |
+| Stray keystrokes become rows | Low | The page captures all keyboard input by design. Junk is flagged unreadable and never counted, but it is stored |
+| Unbounded capture file | Low | `scans_captured.jsonl` has no rotation. Roughly 300 bytes per scan against 86 GB free |
+| Werkzeug debugger | **None** | Verified off. `wsgi.py` requires `SCANAPP_DEBUG=1` to opt in |
+
+Realistic worst case in demo mode: someone on the plant network injects junk
+rows into a JSONL file. There is no database write access because there is no
+database connection.
+
+**Treat this deployment as temporary.** It is a demo and test platform for the
+pilot, not the permanent home. The permanent home is behind the router.
+
 ## Rollback
 
-Run these checks **before** deploying. Without them you cannot tell whether you
-broke something or it was already broken.
+Capture a baseline **before** deploying. It is cheap, and without it you cannot
+prove afterwards whether you broke something or it was already broken.
 
 ```bash
 ls -la /run/gunicorn/ | tee /tmp/baseline_sockets.txt
 systemctl is-active labelapp locationapp signapp logoapp | tee /tmp/baseline_services.txt
 for a in labelapp locationapp signapp logoapp; do printf '%-14s ' $a; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/$a/; done | tee /tmp/baseline_routes.txt
 ```
-
-Also required before touching nginx:
-
-- the `appx-router` backup exists, and **its exact filename is written down**
-- the `diff` against that backup has been reviewed and shows only additions
-- all four existing applications are verified again after the reload
 
 ### Rollback triggers
 
@@ -296,38 +351,44 @@ Roll back if any of these occur:
 - any original AppX route stops returning its baseline status
 - any original Gunicorn socket disappears from `/run/gunicorn/`
 - any original service becomes inactive
-- `nginx -t` fails after the edit
 - ScanApp produces repeated 500 or 502 responses
 - ScanApp cannot create `scans_captured.jsonl`
 - ScanApp reports successful scans without durable persistence
+- `nginx -t` fails after the edit, if and when you move behind the router
 - the nginx diff contains any change outside the intended ScanApp block
 
-### Rollback procedure
+### Rollback, port-bound deployment
+
+Short, because nothing shared was modified.
 
 ```bash
-# 1. Stop and disable ScanApp only. Nothing else is touched.
+# Stop and disable ScanApp only. Nothing else is touched.
 sudo systemctl stop scanapp
 sudo systemctl disable scanapp
 sudo rm -f /etc/systemd/system/scanapp.service
 sudo systemctl daemon-reload
-sudo rm -f /run/gunicorn/scanapp.sock
 
-# 2. Restore the exact nginx backup taken during deployment.
-sudo cp /etc/nginx/sites-available/appx-router.bak-<exact-name> /etc/nginx/sites-available/appx-router
-
-# 3. Validate before applying. Do not reload on a failed test.
-sudo nginx -t
-
-# 4. Reload only if step 3 succeeded.
-sudo systemctl reload nginx     # if nginx is down: sudo systemctl restart nginx
-
-# 5. Check the original four against the baseline.
+# Confirm the four are exactly as they were.
 diff /tmp/baseline_sockets.txt <(ls -la /run/gunicorn/)
 systemctl is-active labelapp locationapp signapp logoapp
 for a in labelapp locationapp signapp logoapp; do printf '%-14s ' $a; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/$a/; done
 ```
 
-**Step 6, conditional and only if needed.** Restart an existing application
+No nginx restore is needed because nginx was never touched, and no socket
+cleanup is needed because none was created.
+
+### Rollback, once behind the router
+
+Adds the config restore before the checks above:
+
+```bash
+sudo cp /etc/nginx/sites-available/appx-router.bak-<exact-name> /etc/nginx/sites-available/appx-router
+sudo nginx -t
+sudo systemctl reload nginx     # if nginx is down: sudo systemctl restart nginx
+sudo rm -f /run/gunicorn/scanapp.sock
+```
+
+**Conditional final step, only if needed.** Restart an existing application
 **only** if step 5 shows it is unhealthy or its socket is missing. Restarting a
 healthy production app is itself an outage, so it is not an automatic step.
 

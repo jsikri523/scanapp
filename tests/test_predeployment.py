@@ -40,6 +40,7 @@ from config import config          # noqa: E402
 from app import create_app, db     # noqa: E402
 
 SERVICE = os.path.join(ROOT, "deploy", "scanapp.service")
+SERVICE_NGINX = os.path.join(ROOT, "deploy", "scanapp-behind-nginx.service")
 NGINX = os.path.join(ROOT, "deploy", "nginx-scanapp.conf")
 README = os.path.join(ROOT, "README.md")
 
@@ -122,11 +123,20 @@ class Base(unittest.TestCase):
 # 1. Deployment artefacts
 # ======================================================================
 
-class TestServiceFile(unittest.TestCase):
+class ServiceFileChecks(object):
+    """
+    Shared assertions for both unit-file variants.
+
+    PATH and EXPECTED_BIND are set by the subclasses. Everything else must hold
+    for either variant, because the hazards are the same in both.
+    """
+
+    PATH = None
+    EXPECTED_BIND = None
 
     @classmethod
     def setUpClass(cls):
-        cls.raw = io.open(SERVICE, encoding="utf-8").read()
+        cls.raw = io.open(cls.PATH, encoding="utf-8").read()
         cls.active = [l for l in cls.raw.split("\n")
                       if l.strip() and not l.strip().startswith("#")]
 
@@ -144,10 +154,6 @@ class TestServiceFile(unittest.TestCase):
 
     def test_restartsec_present(self):
         self.assertIn("RestartSec=5", self.active)
-
-    def test_only_scanapp_socket_referenced(self):
-        socks = sorted(set(re.findall(r"/run/gunicorn/[a-z0-9]+\.sock", self.raw)))
-        self.assertEqual(socks, ["/run/gunicorn/scanapp.sock"])
 
     def test_no_other_appx_app_referenced(self):
         joined = " ".join(self.active)
@@ -177,8 +183,7 @@ class TestServiceFile(unittest.TestCase):
         self.assertEqual(argv[-1], "wsgi:application")
         self.assertIn("--workers", argv)
         self.assertEqual(argv[argv.index("--workers") + 1], "1")
-        self.assertEqual(argv[argv.index("--bind") + 1],
-                         "unix:/run/gunicorn/scanapp.sock")
+        self.assertEqual(argv[argv.index("--bind") + 1], self.EXPECTED_BIND)
         for token in argv:
             self.assertFalse(token.startswith("#"),
                              "comment text leaked into argv: %r" % token)
@@ -193,6 +198,45 @@ class TestServiceFile(unittest.TestCase):
         ):
             self.assertIn(directive, self.active)
 
+
+class TestServiceFilePort(ServiceFileChecks, unittest.TestCase):
+    """deploy/scanapp.service, the variant being deployed now."""
+
+    PATH = SERVICE
+    EXPECTED_BIND = "0.0.0.0:8081"
+
+    def test_binds_tcp_8081(self):
+        self.assertIn("--bind 0.0.0.0:8081", self.raw)
+
+    def test_does_not_touch_the_shared_socket_directory(self):
+        """
+        The strongest isolation property of this variant. It must not reference
+        /run/gunicorn at all, in any active directive: that directory is shared
+        by all four production apps.
+        """
+        for line in self.active:
+            self.assertNotIn("/run/gunicorn", line)
+
+    def test_port_does_not_collide(self):
+        """
+        8081 confirmed free by the audit of 20 August 2026. The box listens on
+        22, 53, 555, 556, 8080, 10000 and 10050.
+        """
+        ports = set(re.findall(r"--bind\s+0\.0\.0\.0:(\d+)", self.raw))
+        self.assertEqual(ports, {"8081"})
+        for taken in ("8080", "10000", "10050", "22"):
+            self.assertNotIn("0.0.0.0:%s" % taken, self.raw)
+
+
+class TestServiceFileBehindNginx(ServiceFileChecks, unittest.TestCase):
+    """deploy/scanapp-behind-nginx.service, kept for the later move."""
+
+    PATH = SERVICE_NGINX
+    EXPECTED_BIND = "unix:/run/gunicorn/scanapp.sock"
+
+    def test_only_scanapp_socket_referenced(self):
+        socks = sorted(set(re.findall(r"/run/gunicorn/[a-z0-9]+\.sock", self.raw)))
+        self.assertEqual(socks, ["/run/gunicorn/scanapp.sock"])
 
 class TestNginxFragment(unittest.TestCase):
 
@@ -240,10 +284,35 @@ class TestReadme(unittest.TestCase):
     def test_chown_documented(self):
         self.assertIn("chown -R www-data:www-data /var/www/apps/scanapp", self.raw)
 
-    def test_verified_test_url_present_without_trailing_slash(self):
+    def test_current_test_url_is_the_port_bound_one(self):
+        """8081 at the root is what gets deployed first."""
+        self.assertIn("http://10.50.0.101:8081/station/saw5", self.raw)
+        self.assertNotIn("http://10.50.0.101:8081/station/saw5/", self.raw)
+        self.assertIn("No trailing slash", self.raw)
+
+    def test_nginx_url_documented_as_the_later_move(self):
         self.assertIn("http://10.50.0.101:8080/scanapp/station/saw5", self.raw)
         self.assertNotIn("http://10.50.0.101:8080/scanapp/station/saw5/", self.raw)
-        self.assertIn("No trailing slash", self.raw)
+
+    def test_both_unit_files_documented(self):
+        self.assertIn("deploy/scanapp.service", self.raw)
+        self.assertIn("deploy/scanapp-behind-nginx.service", self.raw)
+        self.assertIn("Do not install both", self.flat)
+
+    def test_port_deployment_has_no_nginx_step(self):
+        self.assertIn("There is no nginx step", self.flat)
+
+    def test_security_posture_documented(self):
+        self.assertIn("Security posture of the port-bound deployment", self.raw)
+        for risk in ("No authentication on any endpoint", "No host firewall"):
+            self.assertIn(risk, self.raw)
+
+    def test_chown_typo_hazard_called_out(self):
+        self.assertIn("highest-risk keystroke", self.flat)
+
+    def test_port_rollback_states_nginx_untouched(self):
+        self.assertIn("No nginx restore is needed because nginx was never touched",
+                      self.flat)
 
     def test_both_urls_marked_unverified(self):
         self.assertIn("Unverified", self.raw)
