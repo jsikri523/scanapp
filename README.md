@@ -140,9 +140,14 @@ backtick delimited record, established by scanning real labels on 17 and
 | 3 | `master_key` | Sahab, 19 August 2026 | Relayed verbally, **not seen in writing** |
 | 4 | `parent_key` | Sahab, 19 August 2026 | Relayed verbally, **not seen in writing** |
 
-Segment 4 was zero on every scan except one mullion label, `2966`81`8746`8492`,
-and a mullion is a combination unit, which is the one case that would be
-expected to have a parent.
+Segment 4 was zero on every scan except one mullion label:
+
+```
+2966`81`8746`8492
+```
+
+A mullion is a combination unit, which is the one case that would be expected
+to have a parent.
 
 **An earlier reading of segment 2 as a cut list line number was wrong**, and an
 earlier reading of it as a product type code was also wrong. Both came from
